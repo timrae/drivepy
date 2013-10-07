@@ -1,6 +1,6 @@
 from __future__ import division
 from numpy import *
-import visaconnection
+from drivepy import visaconnection
 
 class SpectrumAnalyzer(object):
     """ Class for the Advantest optical spectrum analyzer which provides high level commands for reading spectrums"""

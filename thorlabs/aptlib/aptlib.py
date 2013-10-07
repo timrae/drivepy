@@ -4,7 +4,7 @@ import ftd2xx
 import time
 from struct import pack,unpack
 
-# In debug mode we print out all messages which are sent
+# In debug mode we print out all messages which are sent (in hex)
 DEBUG_MODE=False
 
 class MessageReceiptError(Exception): pass
@@ -44,8 +44,9 @@ class AptDevice(object):
         self.device.close()
 
     def writeMessage(self,messageID,param1=0,param2=0,destID=c.GENERIC_USB_ID,sourceID=c.HOST_CONTROLLER_ID,dataPacket=None):
-        """ Send message to device given messageID, parameters 1 & 2, destination and sourceID ID, and optional data packet + structure, where dataPacket is an array of numeric values,
-        and packetStructure specifies how many bytes each value in the packet """
+        """ Send message to device given messageID, parameters 1 & 2, destination and sourceID ID, and optional data packet, 
+        where dataPacket is an array of numeric values. The method converts all the values to hex according to the protocol
+        specification for the message, and sends this to the device."""
         if dataPacket!=None:
             # If a data packet is included then header consists of concatenation of: messageID (2 bytes),number of bytes in dataPacket (2 bytes), destination byte with MSB=1 (i.e. or'd with 0x80), sourceID byte
             dataPacketStr=pack(c.getPacketStruct(messageID) , *dataPacket)
@@ -57,7 +58,11 @@ class AptDevice(object):
         numBytesWritten=self.device.write(message)
     
     def query(self,txMessageID,rxMessageID,param1=0,param2=0,destID=c.GENERIC_USB_ID,sourceID=c.HOST_CONTROLLER_ID,dataPacket=None):
-        """ Sends a message which expects a reply, and reads the response message, raising an exception if we don't get the message we expect"""
+        """ Sends the REQ query message given by txMessageID, and then retrieves the GET response message given by rxMessageID from the device.
+        param1,param2,destID,and sourceID for the REQ message can also be specified if non-default values are required.
+        The return value is a 7 element tuple with the first 6 values the messageID,param1,param2,destID,sourceID from the GET message header
+        and the final value of the tuple is another tuple containing the values of the data packet, or None if there was no data packet """
+        
         self.writeMessage(txMessageID,param1,param2,destID,sourceID,dataPacket)
         response=self.readMessage()
         if response[0]!=rxMessageID:
@@ -65,8 +70,9 @@ class AptDevice(object):
         return response             
 
     def readMessage(self):
-        """ Read message from device and return tuple of messageID, parameters 1 & 2, destination and sourceID ID, and data packet if included, 
-        where dataPacket is an array of raw numeric values representing the bytes of the data packet. The interpretation of these raw bytes depends on the message """
+        """ Read a single message from the device and return tuple of messageID, parameters 1 & 2, destination and sourceID ID, and data packet 
+        (if included), where dataPacket is a tuple of all the message dependent parameters decoded from hex, 
+        as specified in the protocol documentation. Normally the user doesn't need to call this method as it's automatically called by query()"""
         # Read 6 byte header from device
         headerRaw=self.device.read(c.NUM_HEADER_BYTES)
         if headerRaw=="": raise MessageReceiptError, "Timeout reading from the device"
