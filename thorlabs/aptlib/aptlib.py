@@ -271,7 +271,7 @@ class AptPiezo(_AptPiezo):
 
     def moveToCenter(self,channel):
         """ Moves the specified channel to half of its maximum extension"""
-        self.setPos(channel,self.maxExtension/2)
+        self.setPosition(channel,self.maxExtension/2)
 
     
 if __name__== '__main__': 
