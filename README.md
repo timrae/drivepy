@@ -1,7 +1,7 @@
 drivepy
 =======
 
-High level python drivers for scientific laboratory instruments.
+High level python wrappers for drivers of scientific laboratory instruments.
 
 So far there are classes for the following instruments:
 * Thor Labs and Melles-Griot APT Piezoelectric controllers
