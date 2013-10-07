@@ -5,7 +5,7 @@ import time
 from struct import pack,unpack
 
 # In debug mode we print out all messages which are sent
-DEBUG_MODE=True
+DEBUG_MODE=False
 
 class MessageReceiptError(Exception): pass
 
