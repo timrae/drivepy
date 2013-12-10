@@ -29,7 +29,7 @@ class AptDevice(object):
                 numMatchingDevices+=1
                 self.device=device=ftd2xx.open(dev)
                 break
-            elif hwser==None and (detail["description"] in c.CLASS_STRING_MAPPING[type(self).__name__]):
+            elif hwser==None and (detail["description"] in self.deviceDescriptionStrings()):
                 # Get the first device which is valid for the given class if no hwser
                 numMatchingDevices+=1
                 if numMatchingDevices==1:
@@ -405,6 +405,10 @@ class _AptPiezo(AptDevice):
 
 class AptMotor(_AptMotor):
     """ This class contains higher level methods not provided in the Thor Labs ActiveX control, but are very useful nonetheless """
+    def deviceDescriptionStrings(self):
+        # Mapping dictionary between class names and the description string given by the device
+        return ['APT Stepper Motor Controller']
+    
     def setPosition(self,channel=0,position=0):
         self.MoveAbsoluteEnc(channel,position)
     def getPosition(self, channel = 0):
@@ -414,6 +418,11 @@ class AptMotor(_AptMotor):
         
 class AptPiezo(_AptPiezo):
     """ This class contains higher level methods not provided in the Thor Labs ActiveX control, but are very useful nonetheless """
+
+    def deviceDescriptionStrings(self):
+        """ Return a list of strings for which the device description is compatible with this class """
+        return ["APT Piezo"]
+
     def getEnableState(self,channel):
         response=self.query(c.MGMSG_MOD_REQ_CHANENABLESTATE,c.MGMSG_MOD_GET_CHANENABLESTATE,channel)
         assert response[1]==channel

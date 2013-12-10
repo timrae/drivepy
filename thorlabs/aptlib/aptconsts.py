@@ -1,8 +1,6 @@
 from __future__ import division
 from string import upper
 
-# Mapping dictionary between class names and the description string given by the device
-CLASS_STRING_MAPPING={"AptMotor":['APT Stepper Motor Controller'],"AptPiezo":["APT Piezo"]}
 # Header structure with and without data packet attached
 NUM_HEADER_BYTES=6  # number of bytes to read for message headers
 HEADER_FORMAT_WITHOUT_DATA = '<HBBBB'
