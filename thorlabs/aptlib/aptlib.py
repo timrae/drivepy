@@ -2,10 +2,10 @@ from __future__ import division
 import aptconsts as c
 import ftd2xx
 import time
-from struct import pack,unpack
+from struct import pack,unpack,error
 
 # In debug mode we print out all messages which are sent (in hex)
-DEBUG_MODE=False
+DEBUG_MODE=True
 
 class MessageReceiptError(Exception): pass
 
@@ -17,16 +17,32 @@ class AptDevice(object):
    http://www.ftdichip.com/Support/Documents/ProgramGuides/D2XX_Programmer's_Guide(FT_000071).pdf"""
 
     def __init__(self,hwser=None):
-        if hwser==None:
-            # If only one device connected in the system we can open without specifying anything
+        numDevices=ftd2xx.createDeviceInfoList()
+        if hwser!=None or numDevices>1:
+            numMatchingDevices=0
+            for dev in range(numDevices):
+                detail=ftd2xx.getDeviceInfoDetail(dev)
+                if hwser!=None and detail["serial"]!="" and int(detail["serial"])==hwser:
+                    # Get the first device which matches the serial number if given
+                    self.device=device=ftd2xx.open(dev)
+                    numMatchingDevices+=1
+                    break
+                elif hwser==None and (detail["description"] in c.CLASS_STRING_MAPPING[type(self).__name__]):
+                    # Get the first device which is valid for the given class if no hwser
+                    # Print a warning message if multiple devices match
+                    numMatchingDevices+=1
+                    if numMatchingDevices==1:
+                        self.device=device=ftd2xx.open(dev)
+                elif dev==numDevices-1 and numMatchingDevices==0:
+                    raise ReferenceError, "Hardware serial number " + str(hwser) + " was not found"
+            if numMatchingDevices>1 and hwser==None: 
+                print(str(numMatchingDevices)+" devices found matching " + type(self).__name__ + "; opening the first device")
+        else:
             try:
                 self.device= device = ftd2xx.open()
             except ftd2xx.DeviceError:
                 # If the device fails to open the first time, it's probably because it wasn't closed properly. Simply opening again seems to fix this
                 self.device= device = ftd2xx.open()
-        else:
-            # Open by serial number. Not implemented yet
-            pass
         # Inititalize the device according to FTD2xx and APT requirements
         device.setBaudRate(ftd2xx.defines.BAUD_115200)
         device.setDataCharacteristics(ftd2xx.defines.BITS_8,ftd2xx.defines.STOP_BITS_1,ftd2xx.defines.PARITY_NONE)
@@ -36,8 +52,27 @@ class AptDevice(object):
         device.resetDevice()
         device.setFlowControl(ftd2xx.defines.FLOW_RTS_CTS)
         device.setTimeouts(c.WRITE_TIMEOUT,c.READ_TIMEOUT)
-        self.writeMessage(c.MGMSG_HW_NO_FLASH_PROGRAMMING)  # not sure if this is necessary but Thor Labs do it so just copy them
-        serNum,model,type,firmwareVer,notes,hwVer,modState,numCh=self.query(c.MGMSG_HW_REQ_INFO,c.MGMSG_HW_GET_INFO)[-1]
+        # Check first 2 digits of serial number to see if it's normal type or card/slot type, and build self.channelAddresses as list of (chanID,destAddress) tuples
+        self.channelAddresses=[]
+        if device.serial[0:2] in c.BAY_TYPE_SERIAL_PREFIXES:
+            # Get the device info
+            serNum,model,hwtype,firmwareVer,notes,hwVer,modState,numCh=self.query(c.MGMSG_HW_REQ_INFO,c.MGMSG_HW_GET_INFO,destID=c.RACK_CONTROLLER_ID)[-1]
+            # Check each bay to see if it's enabled and also request hardware info
+            for bay in range(numCh):
+                bayId=c.ALL_BAYS[bay]
+                self.writeMessage(c.MGMSG_HW_NO_FLASH_PROGRAMMING,destID=bayId)
+                if self.BayUsed(bay):
+                    bayInfo=self.query(c.MGMSG_HW_REQ_INFO,c.MGMSG_HW_GET_INFO,destID=bayId)[-1]
+                    self.channelAddresses.append((c.CHANNEL_1,bayId))
+        else:
+            # Otherwise just build a list of the channel numbers
+            self.writeMessage(c.MGMSG_HW_NO_FLASH_PROGRAMMING,destID=c.GENERIC_USB_ID)
+            serNum,model,hwtype,firmwareVer,notes,hwVer,modState,numCh=self.query(c.MGMSG_HW_REQ_INFO,c.MGMSG_HW_GET_INFO)[-1]
+            for channel in range(numCh):
+                self.channelAddresses.append((c.ALL_CHANNELS[channel],c.GENERIC_USB_ID))  
+        for channel in range(len(self.channelAddresses)):
+            self.writeMessage(c.MGMSG_MOD_SET_CHANENABLESTATE,1,c.CHAN_ENABLE_STATE_ENABLED,c.RACK_CONTROLLER_ID)            
+            self.EnableHWChannel(channel)
         print("Connected to %s device with serial number %d. Notes about device: %s"%(model.replace('\x00', ''),serNum,notes.replace('\x00', '')))
         
     def __del__(self):
@@ -49,7 +84,10 @@ class AptDevice(object):
         specification for the message, and sends this to the device."""
         if dataPacket!=None:
             # If a data packet is included then header consists of concatenation of: messageID (2 bytes),number of bytes in dataPacket (2 bytes), destination byte with MSB=1 (i.e. or'd with 0x80), sourceID byte
-            dataPacketStr=pack(c.getPacketStruct(messageID) , *dataPacket)
+            try:
+                dataPacketStr=pack(c.getPacketStruct(messageID) , *dataPacket)
+            except error as e:
+                raise error, "Error packing message " +hex(messageID)+"; probably the packet structure is recorded incorrectly in c.getPacketStruct()"
             message=pack(c.HEADER_FORMAT_WITH_DATA , messageID , len(dataPacketStr) , destID|0x80 , sourceID) + dataPacketStr
         else:
             # If no data packet then header consists of concatenation of: messageID (2 bytes),param 1 byte, param2 bytes,destination byte, sourceID byte
@@ -57,13 +95,16 @@ class AptDevice(object):
         if DEBUG_MODE: self.disp(message,"TX:  ")
         numBytesWritten=self.device.write(message)
     
-    def query(self,txMessageID,rxMessageID,param1=0,param2=0,destID=c.GENERIC_USB_ID,sourceID=c.HOST_CONTROLLER_ID,dataPacket=None):
+    def query(self,txMessageID,rxMessageID,param1=0,param2=0,destID=c.GENERIC_USB_ID,sourceID=c.HOST_CONTROLLER_ID,dataPacket=None,wait=None):
         """ Sends the REQ query message given by txMessageID, and then retrieves the GET response message given by rxMessageID from the device.
         param1,param2,destID,and sourceID for the REQ message can also be specified if non-default values are required.
         The return value is a 7 element tuple with the first 6 values the messageID,param1,param2,destID,sourceID from the GET message header
-        and the final value of the tuple is another tuple containing the values of the data packet, or None if there was no data packet """
+        and the final value of the tuple is another tuple containing the values of the data packet, or None if there was no data packet.
+        A wait parameter can also be optionally specified (in seconds) which introduces a waiting period between writing and reading """
         
         self.writeMessage(txMessageID,param1,param2,destID,sourceID,dataPacket)
+        if wait!=None:
+            time.sleep(wait)
         response=self.readMessage()
         if response[0]!=rxMessageID:
             raise MessageReceiptError, "Error querying apt device when sending messageID " + hex(txMessageID) + ".... Expected to receive messageID " + hex(rxMessageID) + " but got " + hex(response[0])
@@ -113,101 +154,196 @@ class AptDevice(object):
         dispStr=prefixStr + str([hex(ord(c)) for c in s]) + suffixStr
         print(dispStr)
 
+
+    def BayUsed(self,bayId):
+        """ Check if the specified bay is occupied """
+        response=self.query(c.MGMSG_RACK_REQ_BAYUSED,c.MGMSG_RACK_GET_BAYUSED,bayId,0,c.RACK_CONTROLLER_ID)
+        state=response[2]
+        if state==c.BAY_OCCUPIED:
+            return True
+        elif state==c.BAY_EMPTY:
+            return False
+        else:
+            raise MessageReceiptError,"Invalid response from MGMSG_RACK_REQ_BAYUSED"
+
+    def EnableHWChannel(self,channel=0):
+        """ Sent to enable the specified drive channel. """       
+        channelID,destAddress=self.channelAddresses[channel]
+        self.writeMessage(c.MGMSG_MOD_SET_CHANENABLESTATE,channelID,c.CHAN_ENABLE_STATE_ENABLED,destAddress)
+
+    def DisableHWChannel(self,channel=0):
+        """ Sent to disable the specified drive channel. """       
+        channelID,destAddress=self.channelAddresses[channel]
+        self.writeMessage(c.MGMSG_MOD_SET_CHANENABLESTATE,channelID,c.CHAN_ENABLE_STATE_DISABLED,destAddress)
+
+class _AptMotor(AptDevice):
+    def __init__(self,*args,**kwargs):
+        super(_AptMotor,self).__init__(*args,**kwargs)
+        """ MGMSG_MOT_SET_VELPARAMS  -> 13,04,0E,00,A1,01,01,00,00,00,00,00,BC,8C,00,00,F0,EB,3D,05
+        MGMSG_MOT_SET_JOGPARAMS  ->  16,04,16,00,A1,01,01,00,02,00,00,A0,00,00,F7,14,00,00,97,11,00,00,F8,F5,9E,02,02,00
+        MGMSG_MOT_SET_LIMSWITCHPARAMS -> 23,04,10,00,A1,01,01,00,03,00,01,00,00,80,25,00,00,80,0C,00,01,00
+        MGMSG_MOT_SET_POWERPARAMS  -> 26,04,06,00,A1,01,01,00,0F,00,1E,00
+        MGMSG_MOT_SET_GENMOVEPARAMS  ->  3A,04,06,00,A1,01,01,00,00,20,00,00
+        MGMSG_MOT_SET_HOMEPARAMS  ->  40,04,0E,00,A1,01,01,00,02,00,01,00,F8,F5,9E,02,00,80,25,00
+        MGMSG_MOT_SET_MOVERELPARAMS  ->  45,04,06,00,A1,01,01,00,00,0A,00,00
+        MGMSG_MOT_SET_MOVEABSPARAMS  -> 50,04,06,00,A1,01,01,00,00,00,00,00
+        MGMSG_MOD_SET_CHANENABLESTATE -> 10,02,02,01,50,01
+        # Repeat for channel 2
+        MGMSG_HW_START_UPDATEMSGS
+        """
+        # Hack to force the controller and stage type.
+        # TODO: bring stageType into the constructor and extract controllerType from the info string
+        self.MoveHome(channel=1)
+        self.MoveHome(channel=0)
+        self.controllerType="BSC202"
+        self.stageType="DRV001"
+
+    def MoveHome(self,channel=0):
+        """ Home the specified channel and wait for the homed return message to be returned """
+        channelID,destAddress=self.channelAddresses[channel]
+        response=self.query(c.MGMSG_MOT_MOVE_HOME,c.MGMSG_MOT_MOVE_HOMED,channelID,destID=destAddress,wait=3)
+
+    def MoveJog(self,channel=0,direction=c.MOTOR_JOG_FORWARD):
+        """ Jog the specified channel in the specified direction and wait for the move completed message to be returned """
+        channelID,destAddress=self.channelAddresses[channel]
+        response=self.query(c.MGMSG_MOT_MOVE_JOG,c.MGMSG_MOT_MOVE_COMPLETED,channelID,direction,destID=destAddress)
+
+    def MoveAbsoluteEnc(self,channel=0,position=0.0):
+        """ Move the specified channel to the specified absolute position and wait for the move completed message to be returned """
+        channelID,destAddress=self.channelAddresses[channel]
+        posParam=self._positionToEnc(position)
+        response=self.query(c.MGMSG_MOT_MOVE_ABSOLUTE,c.MGMSG_MOT_MOVE_COMPLETED,0x06,destID=destAddress,dataPacket=(channelID,posParam))
+        pass
+
+    def GetStageAxisInfo(self,channel=0):
+        """ Get the stage axis info """
+        channelID,destAddress=self.channelAddresses[channel]
+        response=self.query(c.MGMSG_MOT_REQ_PMDSTAGEAXISPARAMS,c.MGMSG_MOT_GET_PMDSTAGEAXISPARAMS,channelID,destID=destAddress)
+        dataPacket=response[-1]
+        return dataPacket
+
+
+    def LLMoveStop(self,channel=0):
+        """
+        Tx 65,04,01,02,22,01
+        Rx 64,04,0E,00,81,22,01,00,18,E8,02,00,00,00,00,00,00,14,10,80
+        """
+        channelID,destAddress=self.channelAddresses[channel]
+        pass
+
+    def _positionToEnc(self,position):
+        """ convert between position in mm (or angle in degrees where applicable) and appropriate encoder units"""
+        return round(position*c.getMotorScalingFactors(self.controllerType,self.stageType)["position"])
+    
+    def _velocityToEnc(self,velocity):
+        """ convert between velocity in mm/s (angular in degrees/s where applicable) and appropriate encoder units"""
+        return round(velocity*c.getMotorScalingFactors(self.controllerType,self.stageType)["velocity"])
+    
+    def _accelerationToEnc(self,acceleration):
+        """ convert between acceleration in mm/s/s (angular in degrees/s/s where applicable) and appropriate encoder units"""
+        return round(acceleration*c.getMotorScalingFactors(self.controllerType,self.stageType)["acceleration"])
+
 class _AptPiezo(AptDevice):
     """ Wrapper around the messages of the APT protocol specified for piezo controller. The method names (and case) are set the same as in the Thor Labs ActiveX control for compatibility """   
     def __init__(self,hwser=None):
         super(_AptPiezo, self).__init__(hwser)
         self.maxVoltage=75.0                # for some unknown reason our device isn't responding to self.GetMaxOPVoltage()
         self.maxExtension=self.GetMaxTravel()
-        for ch in [c.CHANNEL_1,c.CHANNEL_2]:
-            self.EnableHWChannel(ch)
-            self.writeMessage(c.MGMSG_MOD_SET_DIGOUTPUTS , 0, 0x59) # Thor Labs are doing this, but I have no idea if it's necessary, or what 0x59 is since this is supposed to be 0
-            self.writeMessage(c.MGMSG_PZ_SET_NTMODE,0x01)
+        for ch in range(len(self.channelAddresses)):
             self.SetControlMode(ch)
             self.SetVoltOutput(ch)
-            self.writeMessage(c.MGMSG_PZ_SET_INPUTVOLTSSRC,dataPacket=(ch,c.PIEZO_INPUT_VOLTS_SRC_SW))
-            self.writeMessage(c.MGMSG_PZ_SET_PICONSTS,dataPacket=(ch,c.PIEZO_PID_PROP_CONST,c.PIEZO_PID_INT_CONST))
-            self.writeMessage(c.MGMSG_PZ_SET_IOSETTINGS,dataPacket=(ch,c.PIEZO_AMP_CURRENT_LIM,c.PIEZO_AMP_LP_FILTER,c.PIEZO_AMP_FEEDBACK_SIGNAL,c.PIEZO_AMP_BNCMODE_LVOUT))
+            self.initializeConstants(ch)
             # If we wanna receive status update messages then we need to send MGMSG_HW_START_UPDATEMSGS
             # We would additionally need to send server alive messages every 1s, e.g. MGMSG_PZ_ACK_PZSTATUSUPDATE for Piezo
             # However if we don't need broadcasting of the position etc we can just fetch the status via GET_STATUTSUPDATES
         
-    def EnableHWChannel(self,channelID=c.CHANNEL_1):
-        """ Sent to enable the specified drive channel. """       
-        self.writeMessage(c.MGMSG_MOD_SET_CHANENABLESTATE,channelID,c.CHAN_ENABLE_STATE_ENABLED)
-
-    def DisableHWChannel(self,channelID=c.CHANNEL_1):
-        """ Sent to disable the specified drive channel. """       
-        self.writeMessage(c.MGMSG_MOD_SET_CHANENABLESTATE,channelID,c.CHAN_ENABLE_STATE_DISABLED)
-    
-    def SetControlMode(self,channelID=c.CHANNEL_1,controlMode=c.PIEZO_OPEN_LOOP_MODE):
+    def initializeConstants(self,channel=0):
+        """ Hack to initialize the pieze controller with constants defined explicitly in aptconsts.
+        # TO DO : Make the constants model specific """
+        channelID,destAddress=self.channelAddresses[channel]
+        #self.writeMessage(c.MGMSG_MOD_SET_DIGOUTPUTS , 0, 0x59,destAddress) # Thor Labs are doing this, but I have no idea if it's necessary, or what 0x59 is since this is supposed to be 0
+        self.writeMessage(c.MGMSG_PZ_SET_NTMODE,0x01)
+        self.writeMessage(c.MGMSG_PZ_SET_INPUTVOLTSSRC,0x04,destID=destAddress,dataPacket=(channelID,c.PIEZO_INPUT_VOLTS_SRC_SW))
+        self.writeMessage(c.MGMSG_PZ_SET_PICONSTS,0x06,destID=destAddress,dataPacket=(channelID,c.PIEZO_PID_PROP_CONST,c.PIEZO_PID_INT_CONST))
+        self.writeMessage(c.MGMSG_PZ_SET_IOSETTINGS,0x0A,destID=destAddress,dataPacket=(channelID,c.PIEZO_AMP_CURRENT_LIM,c.PIEZO_AMP_LP_FILTER,c.PIEZO_AMP_FEEDBACK_SIGNAL,c.PIEZO_AMP_BNCMODE_LVOUT))
+            
+    def SetControlMode(self,channel=0,controlMode=c.PIEZO_OPEN_LOOP_MODE):
         """ When in closed-loop mode, position is maintained by a feedback signal from the piezo actuator. 
         This is only possible when using actuators equipped with position sensing.
         This method sets the control loop status The Control Mode is specified in the Mode parameter as per the main documentation """
-        self.writeMessage(c.MGMSG_PZ_SET_POSCONTROLMODE,channelID,controlMode)
+        channelID,destAddress=self.channelAddresses[channel]
+        self.writeMessage(c.MGMSG_PZ_SET_POSCONTROLMODE,channelID,controlMode,destID=destAddress)
 
-    def GetControlMode(self,channelID=c.CHANNEL_1):
+    def GetControlMode(self,channel=0):
         """ Get the control mode of the APT Piezo device"""
-        response=self.query(c.MGMSG_PZ_REQ_POSCONTROLMODE,c.MGMSG_PZ_GET_POSCONTROLMODE,channelID)
+        response=self.query(c.MGMSG_PZ_REQ_POSCONTROLMODE,c.MGMSG_PZ_GET_POSCONTROLMODE,channelID,destID=destAddress)
         assert response[1]==channelID, "inconsistent channel in response message from piezocontroller"
         return response[2]
         
-    def SetVoltOutput(self,channelID=c.CHANNEL_1,voltOutput=0.0):
+    def SetVoltOutput(self,channel=0,voltOutput=0.0):
         """ Used to set the output voltage applied to the piezo actuator. 
         This command is applicable only in Open Loop mode. If called when in Closed Loop mode it is ignored."""
+        channelID,destAddress=self.channelAddresses[channel]
         voltParam=self._voltageAsFraction(voltOutput)
-        self.writeMessage(c.MGMSG_PZ_SET_OUTPUTVOLTS,dataPacket=(channelID,voltParam))
+        self.writeMessage(c.MGMSG_PZ_SET_OUTPUTVOLTS,destID=destAddress,dataPacket=(channelID,voltParam))
 
-    def GetVoltOutput(self,channelID=c.CHANNEL_1):
+    def GetVoltOutput(self,channel=0):
         """ Get the output voltage of the APT Piezo device. Only applicable when in open-loop mode """
-        response=self.query(c.MGMSG_PZ_REQ_OUTPUTVOLTS,c.MGMSG_PZ_GET_OUTPUTVOLTS,channelID)
+        channelID,destAddress=self.channelAddresses[channel]
+        response=self.query(c.MGMSG_PZ_REQ_OUTPUTVOLTS,c.MGMSG_PZ_GET_OUTPUTVOLTS,channelID,destID=destAddress)
         dataPacket=response[-1]
         assert dataPacket[0]==channelID, "inconsistent channel in response message from piezocontroller"
         return self._fractionAsVoltage(dataPacket[1])
             
-    def SetPosOutput(self,channelID=c.CHANNEL_1,posOutput=10.0):
+    def SetPosOutput(self,channel=0,posOutput=10.0):
         """ Used to set the output position of piezo actuator. This command is applicable only in Closed Loop mode. 
         If called when in Open Loop mode it is ignored. 
         The position of the actuator is relative to the datum set for the arrangement using the ZeroPosition method."""
+        channelID,destAddress=self.channelAddresses[channel]
         posParam=self._positionAsFraction(posOutput)
-        self.writeMessage(c.MGMSG_PZ_SET_OUTPUTPOS,dataPacket=(channelID,posParam))
+        self.writeMessage(c.MGMSG_PZ_SET_OUTPUTPOS,destID=destAddress,dataPacket=(channelID,posParam))
 
-    def GetPosOutput(self,channelID=c.CHANNEL_1):
+    def GetPosOutput(self,channel=0):
         """ Get the current position of the APT Piezo device. Only applicable when in closed-loop mode"""
-        response=self.query(c.MGMSG_PZ_REQ_OUTPUTPOS,c.MGMSG_PZ_GET_OUTPUTPOS,channelID)
+        channelID,destAddress=self.channelAddresses[channel]
+        response=self.query(c.MGMSG_PZ_REQ_OUTPUTPOS,c.MGMSG_PZ_GET_OUTPUTPOS,channelID,destID=destAddress)
         dataPacket=response[-1]
         assert dataPacket[0]==channelID, "inconsistent channel in response message from piezocontroller"
         return self._fractionAsPosition(dataPacket[1])
 
-    def ZeroPosition(self,channelID=c.CHANNEL_1):
+    def ZeroPosition(self,channel=0):
         """ This function applies a voltage of zero volts to the actuator associated with the channel specified by the lChanID parameter, and then reads the position. 
         This reading is then taken to be the zero reference for all subsequent position readings. 
         This routine is typically called during the initialisation or re-initialisation of the piezo arrangement. """
-        self.writeMessage(c.MGMSG_PZ_SET_ZERO,channelID)
+        channelID,destAddress=self.channelAddresses[channel]
+        self.writeMessage(c.MGMSG_PZ_SET_ZERO,channelID,destID=destAddress)
 
-    def GetMaxTravel(self,channelID=c.CHANNEL_1):
+    def GetMaxTravel(self,channel=0):
         """ In the case of actuators with built in position sensing, the Piezoelectric Control Unit can detect the range of travel of the actuator 
         since this information is programmed in the electronic circuit inside the actuator. 
         This function retrieves the maximum travel for the piezo actuator associated with the channel specified by the Chan Ident parameter, 
         and returns a value (in microns) in the Travel parameter."""
-        response=self.query(c.MGMSG_PZ_REQ_MAXTRAVEL,c.MGMSG_PZ_GET_MAXTRAVEL,channelID)
+        channelID,destAddress=self.channelAddresses[channel]
+        response=self.query(c.MGMSG_PZ_REQ_MAXTRAVEL,c.MGMSG_PZ_GET_MAXTRAVEL,channelID,destID=destAddress)
         dataPacket=response[-1]
         assert dataPacket[0]==channelID, "inconsistent channel in response message from piezocontroller"
         return dataPacket[1]*c.PIEZO_TRAVEL_STEP
 
-    def GetMaxOPVoltage(self,channelID=c.CHANNEL_1):
+    def GetMaxOPVoltage(self,channel=0):
         """ The piezo actuator connected to the unit has a specific maximum operating voltage range: 75, 100 or 150 V. 
         This function gets the maximum voltage for the piezo actuator associated with the specified channel."""
-        response=self.query(c.MGMSG_PZ_REQ_OUTPUTMAXVOLTS,c.MGMSG_PZ_GET_OUTPUTMAXVOLTS,channelID)
+        channelID,destAddress=self.channelAddresses[channel]
+        response=self.query(c.MGMSG_PZ_REQ_OUTPUTMAXVOLTS,c.MGMSG_PZ_GET_OUTPUTMAXVOLTS,channelID,destID=destAddress)
         dataPacket=response[-1]
         assert dataPacket[0]==channelID, "inconsistent channel in response message from piezocontroller"
         return dataPacket[1]*c.PIEZO_VOLTAGE_STEP
 
-    def LLGetStatusBits(self,channelID=c.CHANNEL_1):
+    def LLGetStatusBits(self,channel=0):
         """ Returns a number of status flags pertaining to the operation of the piezo controller channel specified in the Chan Ident parameter. 
         These flags are returned in a single 32 bit integer parameter and can provide additional useful status information for client application development. 
         The individual bits (flags) of the 32 bit integer value are described in the main documentaton."""
-        response=self.query(c.MGMSG_PZ_REQ_PZSTATUSBITS,c.MGMSG_PZ_GET_PZSTATUSBITS,channelID)
+        channelID,destAddress=self.channelAddresses[channel]
+        response=self.query(c.MGMSG_PZ_REQ_PZSTATUSBITS,c.MGMSG_PZ_GET_PZSTATUSBITS,channelID,destID=destAddress)
         dataPacket=response[-1]
         assert dataPacket[0]==channelID, "inconsistent channel in response message from piezocontroller"
         return dataPacket[1]
@@ -229,6 +365,9 @@ class _AptPiezo(AptDevice):
         """ convert position from short representing fraction of max displacement"""
         return positionFraction/c.PIEZO_MAX_POS_REPR*self.maxExtension
 
+class AptMotor(_AptMotor):
+    pass
+        
 class AptPiezo(_AptPiezo):
     """ This class contains higher level methods not provided in the Thor Labs ActiveX control, but are very useful nonetheless """
     def getEnableState(self,channel):
@@ -276,7 +415,7 @@ class AptPiezo(_AptPiezo):
     
 if __name__== '__main__': 
     p=AptPiezo()
-    for ch in [c.CHANNEL_1,c.CHANNEL_2]:
+    for ch in range(2):
         p.SetControlMode(ch,c.PIEZO_CLOSED_LOOP_MODE)
         p.zero(ch)
         p.moveToCenter(ch)

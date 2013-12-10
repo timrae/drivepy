@@ -1,17 +1,8 @@
-# Device IDs
-HOST_CONTROLLER_ID = 0x01
-RACK_CONTROLLER_ID = 0x11
-BAY_0_ID = 0x21
-BAY_1_ID = 0x22
-BAY_2_ID = 0x23
-BAY_3_ID = 0x24
-BAY_4_ID = 0x25
-BAY_5_ID = 0x26
-BAY_6_ID = 0x27
-BAY_7_ID = 0x28
-BAY_8_ID = 0x29
-BAY_9_ID = 0x2A
-GENERIC_USB_ID = 0x50
+from __future__ import division
+from string import upper
+
+# Mapping dictionary between class names and the description string given by the device
+CLASS_STRING_MAPPING={"AptMotor":['APT Stepper Motor Controller'],"AptPiezo":["APT Piezo"]}
 # Header structure with and without data packet attached
 NUM_HEADER_BYTES=6  # number of bytes to read for message headers
 HEADER_FORMAT_WITHOUT_DATA = '<HBBBB'
@@ -41,9 +32,14 @@ def getPacketStruct(msgID):
     # 9 words
     elif msgID in [0x04E9,0x04EB]:
         return '<HHHHHHHHH'
+    # 1 word + 1 long
+    elif msgID in [0x0453]:
+        return "<Hl"
     # 1 word + 3 longs
-    elif msgID in [0x043A,0x043C,0x0445,0x0447,0x0450,0x0452,0x0448,0x0453,0x0413,0x0415]:
+    elif msgID in [0x043A,0x043C,0x0445,0x0447,0x0450,0x0452,0x0448,0x0413,0x0415]:
         return "<Hlll"
+    elif msgID in [0x0481,0x0466,0x0464]:
+        return "<HllI"
     elif msgID in [0x0410,0x0412,0x0409,0x040B,0x04E6,0x04E8]:
         return "<HHHl"
     elif msgID in [0x0703,0x0705,0x04C3,0x04C5]:
@@ -90,8 +86,6 @@ def getPacketStruct(msgID):
         return '<l8sHI48s12xHHH'
     elif msgID==0x0227:
         return "<I"
-    elif msgID==0x0481:
-        return "<HllI"
     elif msgID==0x0491:
         return "<HlHHI"
     elif msgID ==0x0614:
@@ -108,7 +102,7 @@ def getPacketStruct(msgID):
         raise Exception, "Message " + hex(msgID) + " has a variable data packet structure due to the use of submessages, which hasn't been implemented yet"
     else:
         raise Exception, "Message " + hex(msgID) + " does not have a packet structure specified. Please check the documentation for this messageID"
-    
+  
 # Message codes for all the standard APT messages (only a small fraction of these are actually implemented)
 MGMSG_MOD_IDENTIFY = 0x0223
 MGMSG_MOD_SET_CHANENABLESTATE = 0x0210
@@ -362,15 +356,74 @@ MGMSG_QUAD_REQ_STATUSUPDATE = 0x0880
 MGMSG_QUAD_GET_STATUSUPDATE = 0x0881
 MGMSG_QUAD_SET_EEPROMPARAMS = 0x0875
 
-# ---- Hardware specific constants.  These should be added by developers as needed when developing classes for specific apt hardware devices
-# Constants common for all hardware
-CHAN_ENABLE_STATE_ENABLED=0x01
-CHAN_ENABLE_STATE_DISABLED=0x02
+""" ----------------Generic system constants ---------------------------"""
+# Timeouts in ms
+READ_TIMEOUT=1000   
+WRITE_TIMEOUT=5000  
+PURGE_DELAY=50      
+# Device IDs
+HOST_CONTROLLER_ID = 0x01
+RACK_CONTROLLER_ID = 0x11
+BAY_0_ID = 0x21
+BAY_1_ID = 0x22
+BAY_2_ID = 0x23
+BAY_3_ID = 0x24
+BAY_4_ID = 0x25
+BAY_5_ID = 0x26
+BAY_6_ID = 0x27
+BAY_7_ID = 0x28
+BAY_8_ID = 0x29
+BAY_9_ID = 0x2A
+GENERIC_USB_ID = 0x50
+# Other constants relating to bays
+BAY_OCCUPIED=0x01
+BAY_EMPTY=0x02
+ALL_BAYS=[BAY_0_ID,BAY_1_ID,BAY_2_ID,BAY_3_ID,BAY_4_ID,BAY_5_ID,BAY_6_ID,BAY_7_ID,BAY_8_ID,BAY_9_ID]
+BAY_TYPE_SERIAL_PREFIXES=["70","71","73","94"]      # The first two digits of the serial numbers of the controllers which use the bay type architecture
+# Channel IDs
 CHANNEL_1=0x01
 CHANNEL_2=0x02
-READ_TIMEOUT=1000   # 1s
-WRITE_TIMEOUT=5000  # 5s
-PURGE_DELAY=50      # 50ms
+ALL_CHANNELS=[CHANNEL_1,CHANNEL_2]
+# Other constants relating to channels
+CHAN_ENABLE_STATE_ENABLED=0x01
+CHAN_ENABLE_STATE_DISABLED=0x02
+
+""" ------------ Constants and methods for motor controllers ------------------"""
+def getMotorScalingFactors(controllerType,stageType):
+    """ Get the conversion factor between encoder units and real (position/velocity/acceleration) units (e.g. mm,mm/s,mm/s/s for linear drive, 
+    deg, deg/s, deg/s/s for angular) given the controller type and stage type as strings.  This data comes from section 8 of the introduction (p. 14 onwards) 
+    from the 'Thorlabs APT Controllers Host-Controller Communications Protocol Issue 9'    
+    """
+    # convert the controller/motor strings to uppercase for versatility
+    controller=upper(controllerType)
+    stage=upper(stageType)   
+    # De-inflect into family names from specific models
+    if controller[0:-1] in ["BBD10","BBD20","BSC00","BSC10","BSC20"]: controller=controller[0:-1]+"X"
+    if stage[0:-2] in ["Z8","Z6"]: stage=stage[0:-2]+"XX"
+    # define a dictionary for encCnt based
+    if controller=="TDC001":
+        T=2048/6e6
+        encCnt={"MTS25-Z8":34304,"MTS50-Z8":34304,"PRM1-Z8":1919.64,"Z8XX":34304,"Z6XX":24600}
+        return {"position":encCnt[stage],"velocity":encCnt[stage]*T*65536,"acceleration":encCnt[stage]*T**2*65536}
+    elif controller in ["TBD001","BBD10X","BBD20X"]:
+        T=102.4e-6
+        encCnt={"DDSM100":2000,"MLS203":20000}
+        return {"position":encCnt[stage],"velocity":encCnt[stage]*T*65536,"acceleration":encCnt[stage]*T**2*65536}
+    elif controller in ["TST001","BSC00X","BSC10X","MST601"]:
+        encCnt={"DRV001":51200,"DRV013":25600,"DRV014":25600,"DRV113":20480,"DRV114":20480,"FW103":71/0.998,"NR360":4693/0.999}
+        return {"position":encCnt[stage],"velocity":encCnt[stage],"acceleration":encCnt[stage]}
+    elif controller in ["BSC20X","MST602"]:
+        encCnt={"DRV001":819200,"DRV013":409600,"DRV014":409600,"DRV113":327680,"DRV114":327680,"FW103":1138/1.0002,"NR360":75091/0.99997}
+        return {"position":encCnt[stage],"velocity":encCnt[stage]*53.68,"acceleration":encCnt[stage]/90.9}
+    else:
+       raise NameError, "Controller type: " + controller + " not found"
+
+# Constants for the motor
+MOTOR_JOG_FORWARD=0x01
+MOTOR_JOG_REVERSE=0x02
+
+""" ---- Hardware specific constants.  These should be added by developers as needed when developing classes for specific apt hardware devices -----"""
+
 # Constsants for piezo controller
 PIEZO_OPEN_LOOP_MODE = 0x01
 PIEZO_CLOSED_LOOP_MODE = 0x02
