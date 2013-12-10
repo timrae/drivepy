@@ -33,15 +33,15 @@ def getPacketStruct(msgID):
     elif msgID in [0x04E9,0x04EB]:
         return '<HHHHHHHHH'
     # 1 word + 1 long
-    elif msgID in [0x0453]:
+    elif msgID in [0x0410,0x0412,0x0409,0x040B,0x0453]:
         return "<Hl"
     # 1 word + 3 longs
     elif msgID in [0x043A,0x043C,0x0445,0x0447,0x0450,0x0452,0x0448,0x0413,0x0415]:
         return "<Hlll"
     elif msgID in [0x0481,0x0466,0x0464]:
         return "<HllI"
-    elif msgID in [0x0410,0x0412,0x0409,0x040B,0x04E6,0x04E8]:
-        return "<HHHl"
+    elif msgID in [0x04E6,0x04E8]:
+        return "<HllllH"
     elif msgID in [0x0703,0x0705,0x04C3,0x04C5]:
         return "<HHHllllHlH"
     elif msgID in [0x04A0,0x04A2,0x042A]:
@@ -358,8 +358,9 @@ MGMSG_QUAD_SET_EEPROMPARAMS = 0x0875
 
 """ ----------------Generic system constants ---------------------------"""
 # Timeouts in ms
-READ_TIMEOUT=1000   
+READ_TIMEOUT=500  
 WRITE_TIMEOUT=5000  
+QUERY_TIMEOUT=30000
 PURGE_DELAY=50      
 # Device IDs
 HOST_CONTROLLER_ID = 0x01
@@ -421,6 +422,8 @@ def getMotorScalingFactors(controllerType,stageType):
 # Constants for the motor
 MOTOR_JOG_FORWARD=0x01
 MOTOR_JOG_REVERSE=0x02
+
+DEFAULT_STAGE_TYPE="DRV001"
 
 """ ---- Hardware specific constants.  These should be added by developers as needed when developing classes for specific apt hardware devices -----"""
 

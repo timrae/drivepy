@@ -5,9 +5,10 @@ import time
 from struct import pack,unpack,error
 
 # In debug mode we print out all messages which are sent (in hex)
-DEBUG_MODE=True
+DEBUG_MODE=False
 
 class MessageReceiptError(Exception): pass
+class DeviceNotFoundError(Exception): pass
 
 class AptDevice(object):
     """ Wrapper around the Apt protocol via the ftd2xx driver for USB communication with the FT232BM USB peripheral chip in the APT controllers.
@@ -17,32 +18,32 @@ class AptDevice(object):
    http://www.ftdichip.com/Support/Documents/ProgramGuides/D2XX_Programmer's_Guide(FT_000071).pdf"""
 
     def __init__(self,hwser=None):
+        # Find out how many ftd2xx devices are connected to the USB bus
         numDevices=ftd2xx.createDeviceInfoList()
-        if hwser!=None or numDevices>1:
-            numMatchingDevices=0
-            for dev in range(numDevices):
-                detail=ftd2xx.getDeviceInfoDetail(dev)
-                if hwser!=None and detail["serial"]!="" and int(detail["serial"])==hwser:
-                    # Get the first device which matches the serial number if given
+        # Check each device to see if either the serial number matches (if given) or the description string is recognized as valid for the class type
+        numMatchingDevices=0
+        for dev in range(numDevices):
+            detail=ftd2xx.getDeviceInfoDetail(dev)
+            if hwser!=None and detail["serial"]!="" and int(detail["serial"])==hwser:
+                # Get the first device which matches the serial number if given
+                numMatchingDevices+=1
+                self.device=device=ftd2xx.open(dev)
+                break
+            elif hwser==None and (detail["description"] in c.CLASS_STRING_MAPPING[type(self).__name__]):
+                # Get the first device which is valid for the given class if no hwser
+                numMatchingDevices+=1
+                if numMatchingDevices==1:
                     self.device=device=ftd2xx.open(dev)
-                    numMatchingDevices+=1
-                    break
-                elif hwser==None and (detail["description"] in c.CLASS_STRING_MAPPING[type(self).__name__]):
-                    # Get the first device which is valid for the given class if no hwser
-                    # Print a warning message if multiple devices match
-                    numMatchingDevices+=1
-                    if numMatchingDevices==1:
-                        self.device=device=ftd2xx.open(dev)
-                elif dev==numDevices-1 and numMatchingDevices==0:
-                    raise ReferenceError, "Hardware serial number " + str(hwser) + " was not found"
-            if numMatchingDevices>1 and hwser==None: 
-                print(str(numMatchingDevices)+" devices found matching " + type(self).__name__ + "; opening the first device")
-        else:
-            try:
-                self.device= device = ftd2xx.open()
-            except ftd2xx.DeviceError:
-                # If the device fails to open the first time, it's probably because it wasn't closed properly. Simply opening again seems to fix this
-                self.device= device = ftd2xx.open()
+            elif dev==numDevices-1 and numMatchingDevices==0:
+                # Raise an exception if no devices were found
+                if hwser!=None:
+                    errorStr="Hardware serial number " + str(hwser) + " was not found" 
+                else:
+                    errorStr="No devices found matching class name " + type(self).__name__ + ". Expand the definition of CLASS_STRING_MAPPING if necessary"
+                raise DeviceNotFoundError, errorStr
+        # Print a warning message if no serial given and multiple devices were found which matched the class type
+        if numMatchingDevices>1 and hwser==None: 
+            print(str(numMatchingDevices)+" devices found matching " + type(self).__name__ + "; the first device was opened")
         # Inititalize the device according to FTD2xx and APT requirements
         device.setBaudRate(ftd2xx.defines.BAUD_115200)
         device.setDataCharacteristics(ftd2xx.defines.BITS_8,ftd2xx.defines.STOP_BITS_1,ftd2xx.defines.PARITY_NONE)
@@ -73,6 +74,9 @@ class AptDevice(object):
         for channel in range(len(self.channelAddresses)):
             self.writeMessage(c.MGMSG_MOD_SET_CHANENABLESTATE,1,c.CHAN_ENABLE_STATE_ENABLED,c.RACK_CONTROLLER_ID)            
             self.EnableHWChannel(channel)
+        # Set the controller type
+        self.controllerType=model.replace("\x00","").strip()
+        # Print a message saying we've connected to the device successfuly
         print("Connected to %s device with serial number %d. Notes about device: %s"%(model.replace('\x00', ''),serNum,notes.replace('\x00', '')))
         
     def __del__(self):
@@ -95,17 +99,26 @@ class AptDevice(object):
         if DEBUG_MODE: self.disp(message,"TX:  ")
         numBytesWritten=self.device.write(message)
     
-    def query(self,txMessageID,rxMessageID,param1=0,param2=0,destID=c.GENERIC_USB_ID,sourceID=c.HOST_CONTROLLER_ID,dataPacket=None,wait=None):
+    def query(self,txMessageID,rxMessageID,param1=0,param2=0,destID=c.GENERIC_USB_ID,sourceID=c.HOST_CONTROLLER_ID,dataPacket=None,waitTime=None):
         """ Sends the REQ query message given by txMessageID, and then retrieves the GET response message given by rxMessageID from the device.
         param1,param2,destID,and sourceID for the REQ message can also be specified if non-default values are required.
         The return value is a 7 element tuple with the first 6 values the messageID,param1,param2,destID,sourceID from the GET message header
         and the final value of the tuple is another tuple containing the values of the data packet, or None if there was no data packet.
         A wait parameter can also be optionally specified (in seconds) which introduces a waiting period between writing and reading """
-        
         self.writeMessage(txMessageID,param1,param2,destID,sourceID,dataPacket)
-        if wait!=None:
-            time.sleep(wait)
-        response=self.readMessage()
+        if waitTime!=None:
+            # Keep reading the response until the query timeout is exceeded if wait flag specified
+            t0=time.time()
+            while True:
+                try:
+                    response=self.readMessage()
+                    break
+                except MessageReceiptError:
+                    if time.time()-t0 > waitTime/1000: raise
+        else:
+            # Otherwise just wait for the ordinary read timeout
+            response=self.readMessage()
+        # Check that the received message is the one which was expected
         if response[0]!=rxMessageID:
             raise MessageReceiptError, "Error querying apt device when sending messageID " + hex(txMessageID) + ".... Expected to receive messageID " + hex(rxMessageID) + " but got " + hex(response[0])
         return response             
@@ -131,8 +144,11 @@ class AptDevice(object):
             destID=destID&0x7F
             dataPacketRaw=self.device.read(dataPacketLength)
             if DEBUG_MODE: self.disp(headerRaw+dataPacketRaw,"RX:  ")
-            # If an error occurs at the following line, it's likely due to a problem with the data for packet structure in aptconsts
-            dataPacket=unpack(c.getPacketStruct(messageID),dataPacketRaw)
+            try:
+                dataPacket=unpack(c.getPacketStruct(messageID),dataPacketRaw)
+            except error as e:
+                # If an error occurs, it's likely due to a problem with the manual inputted data for packet structure in aptconsts
+                raise
         else:
             if DEBUG_MODE: self.disp(headerRaw,"RX:  ")
             header=unpack(c.HEADER_FORMAT_WITHOUT_DATA,headerRaw)
@@ -177,9 +193,15 @@ class AptDevice(object):
         self.writeMessage(c.MGMSG_MOD_SET_CHANENABLESTATE,channelID,c.CHAN_ENABLE_STATE_DISABLED,destAddress)
 
 class _AptMotor(AptDevice):
-    def __init__(self,*args,**kwargs):
+    """ Wrapper around the messages of the APT protocol specified for motor controller. The method names (and case) are set the same as in the Thor Labs ActiveX control for compatibility
+
+    !!!! TODO: These are no longer directly compatible with ActiveX control due to the mapping of channel onto destId via self.channelAddresses, therefore it makes more sense to use a cleaner syntax here without
+    worrying about compatibility, and if needed make a AptMotorWrapper(AptMotor) class which gives versions with identical names. This will prevent cluttering of the namespace as well"""   
+    def __init__(self,stageType=c.DEFAULT_STAGE_TYPE,*args,**kwargs):
         super(_AptMotor,self).__init__(*args,**kwargs)
-        """ MGMSG_MOT_SET_VELPARAMS  -> 13,04,0E,00,A1,01,01,00,00,00,00,00,BC,8C,00,00,F0,EB,3D,05
+        """ 
+        ThorLabs APT ActiveX control does the following on initialization of DRV001 stage with BSC203 controller
+        MGMSG_MOT_SET_VELPARAMS  -> 13,04,0E,00,A1,01,01,00,00,00,00,00,BC,8C,00,00,F0,EB,3D,05
         MGMSG_MOT_SET_JOGPARAMS  ->  16,04,16,00,A1,01,01,00,02,00,00,A0,00,00,F7,14,00,00,97,11,00,00,F8,F5,9E,02,02,00
         MGMSG_MOT_SET_LIMSWITCHPARAMS -> 23,04,10,00,A1,01,01,00,03,00,01,00,00,80,25,00,00,80,0C,00,01,00
         MGMSG_MOT_SET_POWERPARAMS  -> 26,04,06,00,A1,01,01,00,0F,00,1E,00
@@ -189,51 +211,64 @@ class _AptMotor(AptDevice):
         MGMSG_MOT_SET_MOVEABSPARAMS  -> 50,04,06,00,A1,01,01,00,00,00,00,00
         MGMSG_MOD_SET_CHANENABLESTATE -> 10,02,02,01,50,01
         # Repeat for channel 2
-        MGMSG_HW_START_UPDATEMSGS
         """
-        # Hack to force the controller and stage type.
-        # TODO: bring stageType into the constructor and extract controllerType from the info string
-        self.MoveHome(channel=1)
-        self.MoveHome(channel=0)
-        self.controllerType="BSC202"
-        self.stageType="DRV001"
+        # TODO: bring stageType into the constructor
+        self.stageType=stageType
+        # Home each channel
+        for c in range(len(self.channelAddresses)):
+            self.MoveHome(channel=c)       
 
-    def MoveHome(self,channel=0):
+    def MoveHome(self,channel=0,wait=True):
         """ Home the specified channel and wait for the homed return message to be returned """
         channelID,destAddress=self.channelAddresses[channel]
-        response=self.query(c.MGMSG_MOT_MOVE_HOME,c.MGMSG_MOT_MOVE_HOMED,channelID,destID=destAddress,wait=3)
+        waitTime=c.QUERY_TIMEOUT if wait else None
+        response=self.query(c.MGMSG_MOT_MOVE_HOME,c.MGMSG_MOT_MOVE_HOMED,channelID,destID=destAddress,waitTime=waitTime)
 
     def MoveJog(self,channel=0,direction=c.MOTOR_JOG_FORWARD):
         """ Jog the specified channel in the specified direction and wait for the move completed message to be returned """
         channelID,destAddress=self.channelAddresses[channel]
         response=self.query(c.MGMSG_MOT_MOVE_JOG,c.MGMSG_MOT_MOVE_COMPLETED,channelID,direction,destID=destAddress)
+    
+    def GetPosition(self,channel=0):
+        """ Get the position in mm """
+        channelID,destAddress=self.channelAddresses[channel]
+        response=self.query(c.MGMSG_MOT_REQ_POSCOUNTER,c.MGMSG_MOT_GET_POSCOUNTER,channelID,destID=destAddress)
+        posParam=response[-1][-1]
+        return self._encToPosition(posParam)
 
-    def MoveAbsoluteEnc(self,channel=0,position=0.0):
+    def MoveAbsoluteEnc(self,channel=0,positionCh1=0.0,positionCh2=0,waitTime=c.QUERY_TIMEOUT,wait=True):
         """ Move the specified channel to the specified absolute position and wait for the move completed message to be returned """
         channelID,destAddress=self.channelAddresses[channel]
+        position=positionCh1
+        waitTimeParam=waitTime if wait else None
         posParam=self._positionToEnc(position)
-        response=self.query(c.MGMSG_MOT_MOVE_ABSOLUTE,c.MGMSG_MOT_MOVE_COMPLETED,0x06,destID=destAddress,dataPacket=(channelID,posParam))
-        pass
+        response=self.query(c.MGMSG_MOT_MOVE_ABSOLUTE,c.MGMSG_MOT_MOVE_COMPLETED,0x06,destID=destAddress,dataPacket=(channelID,posParam),waitTime=waitTimeParam)
+
+    def MoveAbsoluteEx(self,channel=0,positionCh1=0.0,positionCh2=0,wait=True):
+        """ Wrapper for MoveAbsoluteEx """
+        self.MoveAbsoluteEnc(channel,positionCh1,positionCh2,wait=wait)
 
     def GetStageAxisInfo(self,channel=0):
-        """ Get the stage axis info """
+        """ Get the stage axis info... doesn't seem to be working right now """
         channelID,destAddress=self.channelAddresses[channel]
         response=self.query(c.MGMSG_MOT_REQ_PMDSTAGEAXISPARAMS,c.MGMSG_MOT_GET_PMDSTAGEAXISPARAMS,channelID,destID=destAddress)
         dataPacket=response[-1]
         return dataPacket
 
-
     def LLMoveStop(self,channel=0):
-        """
-        Tx 65,04,01,02,22,01
-        Rx 64,04,0E,00,81,22,01,00,18,E8,02,00,00,00,00,00,00,14,10,80
-        """
+        """ Send the stop signal... c.MGMSG_MOT_MOVE_COMPLETED may be returned here if the stage was moving """
+        # TODO: deal with the return message
         channelID,destAddress=self.channelAddresses[channel]
+        self.writeMessage(c.MGMSG_MOT_MOVE_STOP,channelID,destID=destAddress)
         pass
 
     def _positionToEnc(self,position):
         """ convert between position in mm (or angle in degrees where applicable) and appropriate encoder units"""
         return round(position*c.getMotorScalingFactors(self.controllerType,self.stageType)["position"])
+
+    def _encToPosition(self,enc):
+        """ convert between position in mm (or angle in degrees where applicable) and appropriate encoder units"""
+        return enc/c.getMotorScalingFactors(self.controllerType,self.stageType)["position"]
     
     def _velocityToEnc(self,velocity):
         """ convert between velocity in mm/s (angular in degrees/s where applicable) and appropriate encoder units"""
@@ -244,7 +279,10 @@ class _AptMotor(AptDevice):
         return round(acceleration*c.getMotorScalingFactors(self.controllerType,self.stageType)["acceleration"])
 
 class _AptPiezo(AptDevice):
-    """ Wrapper around the messages of the APT protocol specified for piezo controller. The method names (and case) are set the same as in the Thor Labs ActiveX control for compatibility """   
+    """ Wrapper around the messages of the APT protocol specified for piezo controller. The method names (and case) are set the same as in the Thor Labs ActiveX control for compatibility
+
+    !!!! TODO: These are no longer directly compatible with ActiveX control due to the mapping of channel onto destId via self.channelAddresses, therefore it makes more sense to use a cleaner syntax here without
+    worrying about compatibility, and if needed make a AptPiezoWrapper(AptPiezo) class which gives versions with identical names. This will prevent cluttering of the namespace as well"""   
     def __init__(self,hwser=None):
         super(_AptPiezo, self).__init__(hwser)
         self.maxVoltage=75.0                # for some unknown reason our device isn't responding to self.GetMaxOPVoltage()
@@ -366,7 +404,13 @@ class _AptPiezo(AptDevice):
         return positionFraction/c.PIEZO_MAX_POS_REPR*self.maxExtension
 
 class AptMotor(_AptMotor):
-    pass
+    """ This class contains higher level methods not provided in the Thor Labs ActiveX control, but are very useful nonetheless """
+    def setPosition(self,channel=0,position=0):
+        self.MoveAbsoluteEnc(channel,position)
+    def getPosition(self, channel = 0):
+        return self.GetPosition(channel)
+    def zero(self,channel=0):
+        self.MoveHome(channel)
         
 class AptPiezo(_AptPiezo):
     """ This class contains higher level methods not provided in the Thor Labs ActiveX control, but are very useful nonetheless """
