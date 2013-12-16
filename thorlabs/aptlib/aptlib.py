@@ -215,8 +215,13 @@ class _AptMotor(AptDevice):
         # TODO: bring stageType into the constructor
         self.stageType=stageType
         # Home each channel
-        for c in range(len(self.channelAddresses)):
-            self.MoveHome(channel=c)       
+        #for c in range(len(self.channelAddresses)):
+        #    self.MoveHome(channel=c)       
+
+    def __del__(self):
+        for ch in range(len(self.channelAddresses)):
+            self.LLMoveStop(ch)
+        return super(_AptMotor, self).__del__()
 
     def MoveHome(self,channel=0,wait=True):
         """ Home the specified channel and wait for the homed return message to be returned """
