@@ -1,54 +1,54 @@
 from __future__ import division
-import ctypes,time,string,numpy
-DLL_NAME="uart_library.dll"
+import ctypes,time,string,numpy, os
+DLL_NAME=os.path.join(os.path.dirname(__file__),"uart_library.dll")
 BAUD_RATE=115200
 READ_BUFFER_SIZE=256
-NUM_POSITION=8
+NUM_POSITION=6
 SEP_STRING="\r"
+PROMPT_STRING=">"
+import sys
 
 class FilterWheel(object):
     """Class to control the Thor Labs FW102C filter wheel position"""
-    def __init__(self, *args, **kwargs):
-        return super(FilterWheel, self).__init__(*args, **kwargs)
-        self.connection=USBConnection()
-        self.setPositionCount(NUM_POSITION)
-        self.maxPosIndex=NUM_POSITION-1
+    def __init__(self, portNumber=8):
+        self.connection=USBConnection(portNumber)
         self.setSpeedMode(1)
         self.setSensorMode(0)
-
+        fw.setPositionCount(NUM_POSITION)
     def setPosition(self,position):
         """ Set position, where position is an integer starting from 0"""
         position=int(position)
-        if position <0 or position > self.maxPosIndex:
+        if position <1 or position > NUM_POSITION:
             raise InvalidValueError, "The specified position was not valid. Please specify a value between 0 and 7"
-        self.connection.write("pos="+position)
+        self.connection.write("pos="+str(position))
     def getPosition(self):
         """ Get position, where position is an integer starting from 0"""
-        return int(self.connection.query("pos?"))
+        pos=self.connection.query("pos?")
+        return int(pos)
     def setPositionCount(self,posCount):
         """ Set position count: it can either be 6 or 12"""
-        self.connection.write("pcount="+int(posCount))
+        self.connection.write("pcount="+str(int(posCount)))
     def getPositionCount(self):
         """ Get position count: it can either be 6 or 12"""
         return int(self.connection.query("pcount?"))
     def setTriggerMode(self,mode):
         """ Set external trigger mode to either input (0) or output (1) """
-        self.connection.write("trig="+int(mode))
+        self.connection.write("trig="+str(int(mode)))
     def getTriggerMode(self):
         """ Get external trigger mode, with return value either input (0) or output (1) """
-        int(self.connection.query("trig?"))
+        return int(self.connection.query("trig?"))
     def setSpeedMode(self,mode):
         """ Set speed mode to either slow (0) or fast (1) """
-        self.connection.write("speed="+int(mode))
+        self.connection.write("speed="+str(int(mode)))
     def getSpeedMode(self):
         """ Get speed mode, with return value either slow (0) or fast (1) """
-        int(self.connection.query("speed?"))
+        return int(self.connection.query("speed?"))
     def setSensorMode(self,mode):
         """ Set sensor mode to either: off when idle (0), or always on (1) """
-        self.connection.write("sensors="+int(mode))
+        self.connection.write("sensors="+str(int(mode)))
     def getSensorMode(self):
         """ Get sensor mode, with return value either: off when idle (0), or always on (1) """
-        int(self.connection.query("sensors?"))
+        return int(self.connection.query("sensors?"))
     def saveSettings(self):
         """ Save all settings to device non-volatile memory """
         self.connection.write("save")
@@ -61,9 +61,9 @@ class USBConnection(object):
         """ Open the USB connection """
         self.readBufferSize=READ_BUFFER_SIZE
         try:
-            self.lib=ctypes.WinDLL(DLL_NAME)
-        except Exception,e:
-            raise PowerMeterLibraryError,"Could not load the power meter library " + DLL_NAME + ". \n" + e.args[0]
+            self.lib=ctypes.CDLL(DLL_NAME)
+        except Exception as e:
+            raise LibraryError,"Could not load the library " + DLL_NAME + ". \n" + str(e.args)
         # If the port number was not specified then look for available ports
         if portNumber==None:
             # Get list of available devices
@@ -80,8 +80,7 @@ class USBConnection(object):
         self.lib.fnUART_LIBRARY_close()
     def write(self,writeString):
         """ Writes a single command to the USB device"""
-        s=self.lib.fnUART_LIBRARY_write(writeString+SEP_STRING, len(writeString+SEP_STRING))
-        #s=self.lib.fnUART_LIBRARY_Set(writeString+SEP_STRING, len(writeString+SEP_STRING))
+        s=self.lib.fnUART_LIBRARY_Set(writeString+SEP_STRING, len(writeString+SEP_STRING))
         if s<0:
             raise CommError, "Writing of command '" + writeString + "' was not succesful and returned " + str(s)
     
@@ -98,7 +97,11 @@ class USBConnection(object):
         readBuffer=ctypes.create_string_buffer(self.readBufferSize)
         s=self.lib.fnUART_LIBRARY_Get(queryString+SEP_STRING,readBuffer)
         if s==0:
-            return readBuffer.value
+            response=readBuffer.value.strip().split(SEP_STRING)
+            assert(len(response)==3)
+            assert response[0]==queryString
+            assert response[-1]==PROMPT_STRING
+            return response[1]
         elif s==0xEA:
             raise CommError, "The command "+queryString+" was not defined"
         elif s==0xEB or s==0xEC:
@@ -111,10 +114,15 @@ class USBConnection(object):
         commStr=""
         while 1:
             try:
-                commStr+=self.read()
+                buffesrStr==self.read()
+                if len(bufferStr)>0:
+                    commStr+=bufferStr
+                else:
+                    break
             except CommError:
                 break
         return commStr
 
 class CommError(Exception): pass
 class InvalidValueError(Exception): pass
+class LibraryError(Exception): pass

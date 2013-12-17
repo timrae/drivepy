@@ -1,7 +1,7 @@
 from __future__ import division
 import ctypes,time,string,numpy
 READ_BUFFER_SIZE=64
-DLL_NAME="usbdll.dll"
+DLL_NAME=os.path.join(os.path.dirname(__file__),"usbdll.dll")
 SEP_STRING="\r\n"
 END_OF_DATA_STR = "End of Data\r\n"
 END_OF_HEADER_STR = "End of Header\r\n"
