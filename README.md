@@ -4,7 +4,8 @@ drivepy
 High level python wrappers for drivers of scientific laboratory instruments.
 
 So far there are classes for the following instruments:
-* Thor Labs and Melles-Griot APT Piezoelectric controllers
+* Thor Labs and Melles-Griot APT Stepper Motor and Piezoelectric actuator controllers
+* Thor Labs FW102c stepper motor controlled filter wheel
 * Newport Power Meter 1928-C
 * Advantest Optical Spectrum Analyzer Q8384
 
