@@ -1,5 +1,5 @@
 from __future__ import division
-import ctypes,time,string,numpy
+import ctypes,time,string,numpy, os
 READ_BUFFER_SIZE=64
 DLL_NAME=os.path.join(os.path.dirname(__file__),"usbdll.dll")
 SEP_STRING="\r\n"
@@ -25,7 +25,7 @@ class PowerMeter(object):
     def buildRangeDic(self):
         """ Builds a dictionary giving the maximum power values for all range """
         self.rangeDic={}
-        for r in range(MAX_RANGE):
+        for r in range(MAX_RANGE+1):
             self.setRange(r)
             self.rangeDic[r]=self.getMaxPower()
 
@@ -104,7 +104,7 @@ class PowerMeter(object):
             dataSplit=responseBuffer[dataStartIndex:dataEndIndex].splitlines()
             return numpy.array([float(val) for val in dataSplit])
 
-    def readPowerAuto(self,tau=200,timeout=10):
+    def readPowerAuto(self,tau=200,timeout=10,mode="mean"):
         """ Reads the power using custom auto-range functionality and averaged over specified time interval tau in ms.
         A timeout can be specified in seconds for the auto-range and re-measure, where we give up on trying to find a more accurate reading. 
         If the timeout is invoked, it means the power is fluctuating too much with time, and so tau should be increased."""
@@ -112,7 +112,7 @@ class PowerMeter(object):
         # Automatically remeasure if there was a comm. error until timeout occurs
         while 1:
             try:
-                power=self._readPowerAuto(tau,timeout)
+                power=self._readPowerAuto(tau,timeout,mode)
                 break
             except CommError as e:
                 if time.time()-self.t0 < timeout:
@@ -123,7 +123,7 @@ class PowerMeter(object):
         del self.t0
         return power
 
-    def _readPowerAuto(self,tau,timeout):
+    def _readPowerAuto(self,tau,timeout,mode):
         """ Hidden recursive method which does the main work for readPowerAuto() """
         n=int(numpy.ceil(tau))
         # Read an array of samples length tau ms
@@ -140,25 +140,32 @@ class PowerMeter(object):
                 raise
         # Calculate the maximum from the samples
         maxPower=numpy.max(powerSamples)
+        meanPower=numpy.mean(powerSamples)
         # Increase the range if power larger than 99% the measurement limit and return remeasurement
         if maxPower > 0.99*self.rangeDic[self.range]:
             if self.range < MAX_RANGE:
                 self.setRange(self.range+1)
                 time.sleep(1)
-                return self._readPowerAuto(tau,timeout)
+                return self._readPowerAuto(tau,timeout,mode)
             elif maxPower <= self.rangeDic[self.range]:
                 # If max range and between 99%-100% of maximum power then return average
-                return numpy.mean(powerSamples)
+                if mode=="mean":
+                    return meanPower
+                elif mode=="max":
+                    return maxPower
             else:
                 raise CommError, "The measured power was too large. Please enable the attenutator and restart the program"
         # Reduce the range if power smaller than 99% of the measurement limit of the next lowest range and no timeout has occured
         elif self.range > 0 and maxPower < 0.99*self.rangeDic[self.range-1] and (time.time()-self.t0)<timeout:
             self.setRange(self.range-1)
             time.sleep(1)
-            return self._readPowerAuto(tau,timeout)
+            return self._readPowerAuto(tau,timeout,mode)
         # Otherwise return the mean of the n samples
         else:
-            return numpy.mean(powerSamples)
+            if mode=="mean":
+                return meanPower
+            elif mode=="max":
+                return maxPower
         
     def setRange(self,range):
         """ Set the range of the ADC given integer between 0 and MAX_RANGE """
@@ -173,7 +180,13 @@ class PowerMeter(object):
 
     def getMaxPower(self):
         """ returns the maximum readable power for the current float """
-        return self.connection.readFloat("PM:MAX:Power?")
+        remeasure=1
+        while remeasure < 5:
+            try:
+                return self.connection.readFloat("PM:MAX:Power?")
+            except Exception as e:
+                remeasure+=1
+        raise e
 
     def setWavelength(self,wavelength):
         self.connection.write("PM:Lambda "+str(wavelength))
@@ -261,8 +274,14 @@ class USBConnection(object):
         """ Writes the query command in queryString, then reads the response and returns it """
         self.write(queryString)
         returnString=self.read()
-        # Also need to do error checking on the status, but for now just raise exception if too large
-        return float(returnString.strip())
+        try:
+            return float(returnString.strip())
+        except ValueError:
+            self.clearComQueue()
+            self.write(queryString)
+            returnString=self.read()
+            return float(returnString.strip())
+
 
     def clearComQueue(self):
         """ Clears the communication queue in case communication was interrupted somehow. Probably not needed. """

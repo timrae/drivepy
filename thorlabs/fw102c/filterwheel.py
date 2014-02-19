@@ -14,7 +14,7 @@ class FilterWheel(object):
         self.connection=USBConnection(portNumber)
         self.setSpeedMode(1)
         self.setSensorMode(0)
-        fw.setPositionCount(NUM_POSITION)
+        self.setPositionCount(NUM_POSITION)
     def setPosition(self,position):
         """ Set position, where position is an integer starting from 0"""
         position=int(position)
