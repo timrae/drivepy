@@ -22,6 +22,9 @@ class DMM(object):
         readStr=self._dmm.read(":READ?")
         return float(readStr)
 
+    def setAuto(self):
+        self._dmm.write(":SENS:VOLT:DC:RANG:AUTO 1")
+
 class VisaConnection(visaconnection.VisaConnection):
     """ Abstraction of the VISA connection for consistency between implementation of instrument classes """
     def __init__(self,addr,t=None):
