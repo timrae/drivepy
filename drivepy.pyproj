@@ -15,6 +15,7 @@
   <PropertyGroup Condition="'$(Configuration)' == 'Debug'" />
   <PropertyGroup Condition="'$(Configuration)' == 'Release'" />
   <ItemGroup>
+    <Compile Include="anritsu\spectrumanalyzer.py" />
     <Compile Include="thorlabs\fw102c\filterwheel.py" />
     <Compile Include="visaconnection.py" />
     <Compile Include="advantest\spectrumanalyzer.py" />
@@ -37,6 +38,7 @@
     <Folder Include="advantest" />
     <Folder Include="keithley" />
     <Folder Include="newfocus" />
+    <Folder Include="anritsu\" />
     <Folder Include="newport" />
     <Folder Include="scientificinstruments" />
     <Folder Include="thorlabs" />
