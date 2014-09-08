@@ -11,7 +11,7 @@ class VisaConnection(object):
             raise IOError,"Could not create visa connection at GPIB::"+addr+". \n "+e.args[0]
     def write(self,writeString):
         self.lib.write(writeString)
-    def read(self,queryString):
+    def readQuery(self,queryString):
         return self.lib.ask(queryString)
     def wait(self,t):
         self.lib.wait_for_srq(timeout=t)

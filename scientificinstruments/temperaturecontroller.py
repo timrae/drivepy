@@ -33,7 +33,7 @@ class TemperatureController(QObject):
         """ read command cmd a number of times until the expected response is returned """
         attempt=1        
         while attempt < REMEASURE_ATTEMPTS:
-            response=self.tempController.read(cmd)
+            response=self.tempController.readQuery(cmd)
             if response[0]==cmd:
                 break
             else:

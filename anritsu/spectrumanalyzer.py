@@ -21,15 +21,15 @@ class SpectrumAnalyzer(object):
         """ Sets the number of sampling points """
         self._numPoints = numPoints
 
-    def setAttenuator(self, autoMode = false, attn = 10):
-        """ Set autoMode (true/false) and attn value in steps of 10dB"""
+    def setAttenuator(self, autoMode = False, attn = 10):
+        """ Set autoMode (True/False) and attn value in steps of 10dB"""
         if autoMode:
             self._sa.write("AAT 1")
         else:
             self._sa.write("AAT 0")
             self._sa.write("AT "+str(attn))
 
-    def setSweepTime(self, autoMode = false, time = 20):
+    def setSweepTime(self, autoMode = False, time = 20):
         """ Set autoMode (true/false) and sweep time in ms"""
         if autoMode:
             self._sa.write("AST 1")
@@ -42,12 +42,16 @@ class SpectrumAnalyzer(object):
         self._sa.write("TS")                        # Start a sweep
         self._sa.write("BIN 0")                     # Set format to ASCII
         y = zeros(self._numPoints)                  # Create empty array to hold data
-        for idx in range(len(y)):
-            self._sa.write("XMA? "+str(idx)+",1")   # Tell SA to send us point i
-            y[idx] = float(self._sa.read())/100     # Read the value and put it into data array. Measured in steps of 0.01dB
-
-        x = zeros(self._numPoints)  # TODO: What to set this to?
+        # Get each of the 501 data points
+        y = [float(self._sa.readQuery("XMA? "+str(idx)+",1"))/100 for idx in range(501)]
+        x = linspace(self.getStartFreq(), self.getStopFreq(), self._numPoints)
         return (x,y)
+
+    def getStartFreq(self):
+        return float(self._sa.readQuery("STF?")[4:])
+
+    def getStopFreq(self):
+        return float(self._sa.readQuery("SOF?")[4:])
 
 class VisaConnection(visaconnection.VisaConnection):
     """ Abstraction of the VISA connection for consistency between implementation of instrument classes """
