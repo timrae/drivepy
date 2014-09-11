@@ -4,7 +4,7 @@ from time import sleep
 NPLC=1 # Default integration time
 class SMU(object):
     """ Class for the source measure unit which provides high level commands for setting and reading the current """
-    def __init__(self,addr="GPIB::25",autoZero=True,disableScreen=False,defaultCurrent=50e-3):
+    def __init__(self,addr="GPIB::25",autoZero=True,disableScreen=False,defaultCurrent=50e-3, currRange=0.1):
         self._smu=VisaConnection(addr,defaultCurrent=defaultCurrent)
         self._smu.write("*RST")
         self._smu.write(":FORM:ELEM:SENS VOLT,CURR")
@@ -17,18 +17,23 @@ class SMU(object):
         if not autoZero:
             self._smu.write(":SYST:AZER:STAT 0") # Turn off auto-zero to improve speed
         self._smu.write(":SENS:CURR:NPLC "+str(NPLC))
-    def setCurrent(self,setCurr,Vcomp=3.5,currRange=100e-3):
+        self.setCurrRange(currRange)
+    def setCurrent(self,setCurr,Vcomp=3.5):
         """ Sets the current and returns a voltage from SMU"""
         # Set source mode
         self._smu.write(":SOUR:FUNC CURR; :SOUR:CURR:MODE FIX")
         # Set current and range. Would be nice to set the range automatically based on supplied current
-        self._smu.write(":SOUR:CURR:RANGE " + str(currRange)+"; :SOUR:CURR:LEV "+str(setCurr)) 
+        self._smu.write(":SOUR:CURR:LEV "+str(setCurr)) 
         # Setup voltage measure function
         self._smu.write(':SENS:FUNC "VOLT";' + ":SENS:VOLT:PROT "+str(Vcomp)+"; :SENS:VOLT:RANG 10")
+
+    def setCurrRange(self,range):
+        self._smu.write(":SOUR:CURR:RANGE " + str(range))
+
     def measure(self):
         """ Returns (voltage,current) measurement tuple from SMU """
         assert self.state, "The SMU needs to be turned ON to make an ouput measurement"
-        readStr=self._smu.read(":READ?").split(',')
+        readStr=self._smu.readQuery(":READ?").split(',')
         return (float(readStr[0]),float(readStr[1]))
     def autoZeroOnce(self):
         """ This is a workaround to autozero the SMU. ':SYS:AZER:STAT ONCE' would be better but not working. 

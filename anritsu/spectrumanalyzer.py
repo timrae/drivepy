@@ -2,6 +2,9 @@ from __future__ import division
 from numpy import *
 from drivepy import visaconnection
 
+# Mapping of index to resolution bandwidth in Hz
+RBW_DICT={0:30, 1:100, 2:300, 3:1e3, 4:3e3, 5:10e3, 6:30e3, 7:100e3, 8:300e3, 9:1e6, 13:10, 14:3e6}
+
 class SpectrumAnalyzer(object):
     """ Class for the Anritsu spectrum analyzer which provides high level commands for reading spectrums"""
     def __init__(self,addr="GPIB::2",timeout=60):
@@ -37,15 +40,31 @@ class SpectrumAnalyzer(object):
             self._sa.write("AST 0")
             self._sa.write("ST "+str(time)+"MS")
 
+    def setRbw(self,index):
+        """ Set resolution bandwidth of spectrum analyzer -- see RBW_DICT for mapping"""
+        self._sa.write("RBW "+str(index))
+
+    def getRbw(self):
+        """ Return resolution bandwidth of specan in Hz"""
+        rbwIndex=int(self._sa.readQuery("RBW?")[4:])
+        return RBW_DICT[rbwIndex]
+
+    def getNoiseBandwidth(self):
+        """ Return the noise bandwidth of specan """
+        return self.getRbw()*1.2
+
     def obtainSpectrum(self):
         """ Obtain a spectrum from the OSA. Based on Example VB-5 in the user manual for the Q8384 """
         self._sa.write("TS")                        # Start a sweep
         self._sa.write("BIN 0")                     # Set format to ASCII
         y = zeros(self._numPoints)                  # Create empty array to hold data
         # Get each of the 501 data points
-        y = [float(self._sa.readQuery("XMA? "+str(idx)+",1"))/100 for idx in range(501)]
+        y = array([self.dbmToWatts(float(self._sa.readQuery("XMA? "+str(idx)+",1"))/100) for idx in range(501)])
         x = linspace(self.getStartFreq(), self.getStopFreq(), self._numPoints)
         return (x,y)
+
+    def dbmToWatts(self,dbm):
+        return 10**(dbm/10)/1000
 
     def getStartFreq(self):
         return float(self._sa.readQuery("STF?")[4:])

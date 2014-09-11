@@ -19,7 +19,7 @@ class DMM(object):
 
     def measure(self):
         """ Returns measurement for configured measurement type"""
-        readStr=self._dmm.read(":READ?")
+        readStr=self._dmm.readQuery(":READ?")
         return float(readStr)
 
     def setAuto(self):
