@@ -8,6 +8,7 @@ So far there are classes for the following instruments:
 * Thor Labs FW102c stepper motor controlled filter wheel
 * Newport Power Meter 1928-C
 * Advantest Optical Spectrum Analyzer Q8384
+* Anritsu MS2668C Electrical Spectrum Analyzer
 
 I will add support for more instruments when I use them in my research. 
 Also, I hope that anyone who finds these useful will also contribute 
