@@ -1,4 +1,4 @@
-from __future__ import division
+﻿from __future__ import division
 from drivepy import visaconnection
 from time import sleep
 NPLC=1 # Default integration time
@@ -67,8 +67,8 @@ class SMU(object):
 
 class VisaConnection(visaconnection.VisaConnection):
     """ Abstraction of the VISA connection for consistency between implementation of instrument classes """
-    def __init__(self,addr,defaultCurrent,t=5):
-        super(VisaConnection,self).__init__(addr,t)  
+    def __init__(self,addr,defaultCurrent):
+        super(VisaConnection,self).__init__(addr)  
         self.defaultCurrent=defaultCurrent
     def __del__(self):
         self.write(":OUTP OFF")

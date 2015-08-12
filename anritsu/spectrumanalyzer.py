@@ -4,6 +4,7 @@ from drivepy import visaconnection
 
 # Mapping of index to resolution bandwidth in Hz
 RBW_DICT={0:30, 1:100, 2:300, 3:1e3, 4:3e3, 5:10e3, 6:30e3, 7:100e3, 8:300e3, 9:1e6, 13:10, 14:3e6}
+VBW_DICT={0:1, 1:10, 2:100, 3:1e3, 4:10e3, 5:100e3, 6:float("inf"), 7:1e6, 8:3, 9:30, 10:300, 11:3e3, 12:30e3, 13:300e3, 14:3e6}
 
 class SpectrumAnalyzer(object):
     """ Class for the Anritsu spectrum analyzer which provides high level commands for reading spectrums"""
@@ -44,6 +45,10 @@ class SpectrumAnalyzer(object):
         """ Set resolution bandwidth of spectrum analyzer -- see RBW_DICT for mapping"""
         self._sa.write("RBW "+str(index))
 
+    def setVbw(self,index):
+        """ Set video bandwidth of spectrum analyzer -- see VBW_DICT for mapping"""
+        self._sa.write("VBW "+str(index))
+
     def getRbw(self):
         """ Return resolution bandwidth of specan in Hz"""
         rbwIndex=int(self._sa.readQuery("RBW?")[4:])
@@ -59,7 +64,7 @@ class SpectrumAnalyzer(object):
         self._sa.write("BIN 0")                     # Set format to ASCII
         y = zeros(self._numPoints)                  # Create empty array to hold data
         # Get each of the 501 data points
-        y = array([self.dbmToWatts(float(self._sa.readQuery("XMA? "+str(idx)+",1"))/100) for idx in range(501)])
+        y = array([self.dbmToWatts(float(m)/100) for m in self._sa.readQuery("XMA? 0,501").split(",")])
         x = linspace(self.getStartFreq(), self.getStopFreq(), self._numPoints)
         return (x,y)
 
