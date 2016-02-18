@@ -1,14 +1,15 @@
-from __future__ import division
+﻿from __future__ import division
+from drivepy.base.powermeter import BasePowerMeter, CommError, PowerMeterLibraryError
 import ctypes,time,string,numpy, os
 READ_BUFFER_SIZE=64
-DLL_NAME=os.path.join(os.path.dirname(__file__),"usbdll.dll")
+DLL_NAME=os.path.join(os.path.dirname(os.path.realpath(__file__)),"usbdll.dll")
 SEP_STRING="\r\n"
 END_OF_DATA_STR = "End of Data\r\n"
 END_OF_HEADER_STR = "End of Header\r\n"
 MAX_RANGE=4
 READ_TIMEOUT=10
 
-class PowerMeter(object):
+class PowerMeter(BasePowerMeter):
     """ Creates a power meter object, from which we can take power meter readings using readPower() 
     or send commands/queries using sendCommand(command)."""
     def __init__(self,pid=0xcec7,*setupArgs):
@@ -16,24 +17,24 @@ class PowerMeter(object):
         NewportPwrMtr.inf e.g. in C:\Program Files\Newport\Newport USB Driver\Bin"""
         self.pid=pid
         self.connection=USBConnection(pid)
-        self.setupMeter(*setupArgs)
+        self._setupMeter(*setupArgs)
     def reset(self):
         """ resets the connection in case it has frozen """
         del self.connection
         self.connection=USBConnection(self.pid)
 
-    def buildRangeDic(self):
+    def _buildRangeDic(self):
         """ Builds a dictionary giving the maximum power values for all range """
         self.rangeDic={}
         for r in range(MAX_RANGE+1):
             self.setRange(r)
             self.rangeDic[r]=self.getMaxPower()
 
-    def setupMeter(self,wavelength=1300,autoRange=0,range=1,filterType=1,analogFilter=4,digitalFilter=10000,units=2):
+    def _setupMeter(self,wavelength=1300,autoRange=0,range=1,filterType=1,analogFilter=4,digitalFilter=10000,units=2):
         """ routine to setup the power meter to a predetermined state"""
         self.setWavelength(wavelength)
         self.setUnits(units)
-        self.buildRangeDic()
+        self._buildRangeDic()
         self.setRange(range)
         self.setAutoRange(autoRange)
         self.setAnalogFilter(analogFilter)
@@ -41,7 +42,7 @@ class PowerMeter(object):
         self.setFilterType(filterType)
         self.initBuffer()
 
-    def readPower(self):
+    def readPowerRaw(self):
         """ routine to read a single power measurement and return as float. 
         This is much faster than readPowerAuto() but requires range to be set correctly, and doesn't do any averaging."""
         c=self.connection
@@ -63,7 +64,7 @@ class PowerMeter(object):
     def readPowerN(self,n):
         """ Read fixed buffer of n samples """
         if n==1:
-            return numpy.array(self.readPower())
+            return numpy.array(self.readPowerRaw())
         else:
             # Clear buffer, set size of buffer, then set enable true which will fill the buffer
             self.connection.write("pm:ds:clear")
@@ -78,7 +79,7 @@ class PowerMeter(object):
                 timeout=delay > READ_TIMEOUT
                 if numValues >= n:
                     break
-                elif self.readPower()>self.rangeDic[self.range]:
+                elif self.readPowerRaw()>self.rangeDic[self.range]:
                     # sometimes "PM:DS:Count?" doesn't work when saturating, but a normal read does
                     raise SaturatingError
             if timeout: raise CommError, "Expected "+str(n)+" samples from power meter, but only received "+str(numValues)
@@ -104,27 +105,10 @@ class PowerMeter(object):
             dataSplit=responseBuffer[dataStartIndex:dataEndIndex].splitlines()
             return numpy.array([float(val) for val in dataSplit])
 
-    def readPowerAuto(self,tau=200,timeout=10,mode="mean"):
+    def readPower(self, tau=200, mode="mean"):
         """ Reads the power using custom auto-range functionality and averaged over specified time interval tau in ms.
         A timeout can be specified in seconds for the auto-range and re-measure, where we give up on trying to find a more accurate reading. 
-        If the timeout is invoked, it means the power is fluctuating too much with time, and so tau should be increased."""
-        self.t0=time.time()
-        # Automatically remeasure if there was a comm. error until timeout occurs
-        while 1:
-            try:
-                power=self._readPowerAuto(tau,timeout,mode)
-                break
-            except CommError as e:
-                if time.time()-self.t0 < timeout:
-                    pass
-                else:
-                    # If timeout occurs, re-raise the (same) error
-                    raise
-        del self.t0
-        return power
-
-    def _readPowerAuto(self,tau,timeout,mode):
-        """ Hidden recursive method which does the main work for readPowerAuto() """
+        If the timeout is invoked, it means the power is fluctuating too much with time, and so tau should be increased."""    
         n=int(numpy.ceil(tau))
         # Read an array of samples length tau ms
         try:
@@ -293,6 +277,4 @@ class USBConnection(object):
                 break
         return commStr
 
-class CommError(Exception): pass
 class SaturatingError(Exception): pass
-class PowerMeterLibraryError(Exception): pass
