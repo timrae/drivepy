@@ -13,3 +13,5 @@ There are classes for the following instruments:
 
 I hope that someone will find these useful and will also contribute their own drivers to make life as easy as possible for
 other scientists/engineers who want to use Python for instrument control as a viable alternative to Labview and Matlab.
+
+The drivers were developed and tested on a Windows x86 environment with the Enthought Canopy Python 2.7 distribution. Your mileage may vary on other development environments. The package is released under the GPL license with no warranty, please see the license file.
