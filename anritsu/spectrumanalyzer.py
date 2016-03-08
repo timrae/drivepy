@@ -1,4 +1,4 @@
-from __future__ import division
+﻿from __future__ import division
 from numpy import *
 from drivepy import visaconnection
 
@@ -80,7 +80,8 @@ class SpectrumAnalyzer(object):
 class VisaConnection(visaconnection.VisaConnection):
     """ Abstraction of the VISA connection for consistency between implementation of instrument classes """
     def __init__(self,addr,t):
-        super(VisaConnection,self).__init__(addr,t)    
+        super(VisaConnection,self).__init__(addr)
+        # TODO: set timeout
     def getFloatArray(self,request):
         """ retrieve an array of floats as specified by request string ("OSD0"|"OSD1") """
         n=int(self.lib.ask("ODN?"))

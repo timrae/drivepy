@@ -1,7 +1,9 @@
-from __future__ import division
+﻿from __future__ import division
 from drivepy.base.powermeter import BasePowerMeter, CommError, PowerMeterLibraryError
-import visaconnection
-DEFAULT_AVERAGING_TIME = 0.1    # 100ms
+import drivepy.visaconnection as visaconnection
+import math
+DEFAULT_AVERAGING_TIME = 100    # ms
+AVERAGING_TIME_MAX_MODE = 20    # ms
 
 class PowerMeter(BasePowerMeter):
     """ Creates a power meter object for the Agilent 8163A/B power meter via GPIB """
@@ -17,21 +19,25 @@ class PowerMeter(BasePowerMeter):
         # change the power unit to Watts
         self._conn.write("SENS1:CHAN1:POW:UNIT W")
         # set the default averaging time
-        self.tau = DEFAULT_AVERAGING_TIME
-        self._conn.write("SENS1:CHAN1:POW:ATIME %f"%self.tau)
+        self.tau = None
+        self._setTau(DEFAULT_AVERAGING_TIME)
         # turn continuous measuring on
         self._conn.write("INIT1:CHAN1:CONT 1")
 
     def readPower(self, tau=DEFAULT_AVERAGING_TIME, mode="mean"):
         """ Read the power using specified averaging time and either max or averaging mode """
+        if mode == 'mean' or tau <= AVERAGING_TIME_MAX_MODE:
+            self._setTau(tau)
+            return self._readPower()
+        elif mode == "max":
+            n = int(math.ceil(tau/AVERAGING_TIME_MAX_MODE))
+            self._setTau(AVERAGING_TIME_MAX_MODE)
+            return max([self._readPower() for i in range(n)])
+    
+    def _setTau(self, tau):
         if not tau == self.tau:
+            self._conn.write("SENS1:CHAN1:POW:ATIME %f"%(tau/1000))
             self.tau = tau
-            self._conn.write("SENS1:CHAN1:POW:ATIME %f"%self.tau)
-        if mode == "max":
-            raise NotImplementedError, "Max mode not currently supported"
-            # use bestOfN() ? 
-            # TODO: Also need to implement the VISA timeout and check Newfocus / Winspec devices
-        return self._readPower()
     
     def _readPower(self):
         readStr=self._conn.readQuery("READ1:CHAN1:POW?")

@@ -130,7 +130,7 @@ class PowerMeter(BasePowerMeter):
             if self.range < MAX_RANGE:
                 self.setRange(self.range+1)
                 time.sleep(1)
-                return self._readPowerAuto(tau,timeout,mode)
+                return self.readPower(tau,mode)
             elif maxPower <= self.rangeDic[self.range]:
                 # If max range and between 99%-100% of maximum power then return average
                 if mode=="mean":
@@ -140,10 +140,10 @@ class PowerMeter(BasePowerMeter):
             else:
                 raise CommError, "The measured power was too large. Please enable the attenutator and restart the program"
         # Reduce the range if power smaller than 99% of the measurement limit of the next lowest range and no timeout has occured
-        elif self.range > 0 and maxPower < 0.99*self.rangeDic[self.range-1] and (time.time()-self.t0)<timeout:
+        elif self.range > 0 and maxPower < 0.99*self.rangeDic[self.range-1] and self.t0 and (time.time()-self.t0) < self.timeout:
             self.setRange(self.range-1)
             time.sleep(1)
-            return self._readPowerAuto(tau,timeout,mode)
+            return self.readPower(tau,mode)
         # Otherwise return the mean of the n samples
         else:
             if mode=="mean":
